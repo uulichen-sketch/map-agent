@@ -6,6 +6,13 @@ from typing import Optional
 from .base import MapProvider
 from .registry import ProviderRegistry
 
+# Register providers at module import time
+from .hms import HMSProvider
+from .gaode import AmapProvider
+
+ProviderRegistry.register("hms", HMSProvider)
+ProviderRegistry.register("gaode", AmapProvider)
+
 
 def create_provider(
     provider_id: str,
@@ -15,7 +22,7 @@ def create_provider(
 
     Args:
         provider_id: Unique identifier of the provider (e.g., "hms", "gaode")
-        **config: Provider-specific configuration options
+        **config:
 
     Returns:
         Instantiated provider object
