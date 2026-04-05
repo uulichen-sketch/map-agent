@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from typing import Any, Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -539,6 +540,197 @@ def _register_provider_tools(mcp_server: FastMCP) -> None:
             }, ensure_ascii=False)
         except Exception as e:
             return json.dumps({"error": True, "message": str(e)}, ensure_ascii=False)
+
+    @mcp_server.tool()
+    async def transit_route(
+        origin_lng: float,
+        origin_lat: float,
+        dest_lng: float,
+        dest_lat: float,
+        language: str | None = None,
+    ) -> str:
+        """Plan a public transit route (bus/metro).
+
+        Returns route with distance, duration, and transit steps.
+        Note: Only Google Maps supports transit mode, other providers may raise error.
+        """
+        try:
+            route = await provider.route(
+                origin_lat=origin_lat, origin_lon=origin_lng,
+                dest_lat=dest_lat, dest_lon=dest_lng,
+                mode="transit", language=language,
+            )
+            return json.dumps({
+                "returnCode": "0",
+                "routes": [_route_to_dict(r) for r in [route]],
+            }, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"error": True, "message": str(e)}, ensure_ascii=False)
+
+    @mcp_server.tool()
+    async def measure_distance(
+        points: list[dict],
+        mode: str = "straight",
+    ) -> str:
+        """Measure distance between multiple points.
+
+        Args:
+            points: List of points in format [{"lat": 22.5, "lng": 114.0}, ...]
+            mode: Distance calculation mode ("straight" = Euclidean, "route" = actual route distance)
+
+        Returns:
+            Total distance in meters and per-segment distances.
+        """
+        try:
+            if len(points) < 2:
+                return json.dumps({
+                    "error": True,
+                    "message": "At least 2 points are required",
+                }, ensure_ascii=False)
+
+            if mode == "straight":
+                # Calculate Euclidean distance (straight line)
+                total_distance = 0
+                segments = []
+
+                for i in range(len(points) - 1):
+                    p1 = points[i]
+                    p2 = points[i + 1]
+
+                    # Haversine formula for geodesic distance
+                    lat1 = p1["lat"] * (3.14159 / 180.0)
+                    lon1 = p1["lng"] * (3.14159 / 180.0)
+                    lat2 = p2["lat"] * (3.14159 / 180.0)
+                    lon2 = p2["lng"] * (3.14159 / 180.0)
+
+                    dlat = lat2 - lat1
+                    dlon = lon2 - lon1
+                    a = (math.sin(dlat / 2) ** 2) + math.cos(lat1) * math.cos(lat2) * (math.sin(dlon / 2) ** 2)
+                    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+                    radius = 6371000  # Earth radius in meters
+                    distance = radius * c
+
+                    total_distance += distance
+                    segments.append({
+                        "from": p1,
+                        "to": p2,
+                        "distance": round(distance, 2),
+                    })
+
+                return json.dumps({
+                    "returnCode": "0",
+                    "total_distance": round(total_distance, 2),
+                    "unit": "meters",
+                    "mode": "straight",
+                    "segments": segments,
+                }, ensure_ascii=False)
+
+            elif mode == "route":
+                # Calculate actual route distance for each segment
+                total_distance = 0
+                segments = []
+
+                for i in range(len(points) - 1):
+                    p1 = points[i]
+                    p2 = points[i + 1]
+
+                    try:
+                        route = await provider.route(
+                            origin_lat=p1["lat"], origin_lon=p1["lng"],
+                            dest_lat=p2["lat"], dest_lon=p2["lng"],
+                            mode="driving",
+                        )
+                        segment_distance = route.distance
+                        total_distance += segment_distance
+                        segments.append({
+                            "from": p1,
+                            "to": p2,
+                            "distance": segment_distance,
+                            "mode": "route",
+                        })
+                    except Exception as e:
+                        # Fallback to straight-line distance if route fails
+                        lat1 = p1["lat"] * (3.14159 / 180.0)
+                        lon1 = p1["lng"] * (3.14159 / 180.0)
+                        lat2 = p2["lat"] * (3.14159 / 180.0)
+                        lon2 = p2["lng"] * (3.14159 / 180.0)
+
+                        dlat = lat2 - lat1
+                        dlon = lon2 - lon1
+                        a = (math.sin(dlat / 2) ** 2) + math.cos(lat1) * math.cos(lat2) * (math.sin(dlon / 2) ** 2)
+                        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+                        radius = 6371000
+                        distance = radius * c
+
+                        total_distance += distance
+                        segments.append({
+                            "from": p1,
+                            "to": p2,
+                            "distance": round(distance, 2),
+                            "mode": "straight (fallback)",
+                        })
+
+                return json.dumps({
+                    "returnCode": "0",
+                    "total_distance": total_distance,
+                    "unit": "meters",
+                    "mode": "route",
+                    "segments": segments,
+                }, ensure_ascii=False)
+
+            else:
+                return json.dumps({
+                    "error": True,
+                    "message": f"Unknown mode: {mode}",
+                }, ensure_ascii=False)
+
+        except Exception as e:
+            return json.dumps({"error": True, "message": str(e)}, ensure_ascii=False)
+
+    @mcp_server.tool()
+    async def ip_geolocate(
+        ip_address: str | None = None,
+    ) -> str:
+        """Get geolocation information for an IP address.
+
+        Args:
+            ip_address: IP address to lookup (if None, uses client's IP)
+
+        Returns:
+            IP geolocation data including city, region, country, and ISP.
+        """
+        import httpx
+        try:
+            # Use ip-api.com free service
+            if ip_address is None:
+                # Get client's IP
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.get("https://api.ipify.org")
+                    ip_address = resp.text.strip()
+
+            # Get IP geolocation
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"http://ip-api.com/json/{ip_address}")
+                resp.raise_for_status()
+                data = resp.json()
+
+                return json.dumps({
+                    "returnCode": "0",
+                    "ip": ip_address,
+                    "country_code": data.get("country_code"),
+                    "country": data.get("country_name"),
+                    "region": data.get("region_name"),
+                    "city": data.get("city"),
+                    "latitude": data.get("latitude"),
+                    "longitude": data.get("longitude"),
+                    "isp": data.get("org"),
+                }, ensure_ascii=False)
+
+        except Exception as e:
+            return json.dumps({
+                "error": True,
+                "message": str(e),
+            }, ensure_ascii=False)
 
 
 def _poi_to_dict(poi: POI) -> dict:
