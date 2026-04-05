@@ -3,6 +3,7 @@
 from .base import MapProvider, POI, Route
 from .hms import HMSProvider
 from .gaode import AmapProvider
+from .google import GoogleMapsProvider
 from .factory import create_provider, get_default_provider, list_providers
 from .registry import ProviderRegistry
 
@@ -12,6 +13,7 @@ __all__ = [
     "Route",
     "HMSProvider",
     "AmapProvider",
+    "GoogleMapsProvider",
     "ProviderRegistry",
     "create_provider",
     "get_default_provider",

@@ -9,9 +9,11 @@ from .registry import ProviderRegistry
 # Register providers at module import time
 from .hms import HMSProvider
 from .gaode import AmapProvider
+from .google import GoogleMapsProvider
 
 ProviderRegistry.register("hms", HMSProvider)
 ProviderRegistry.register("gaode", AmapProvider)
+ProviderRegistry.register("google", GoogleMapsProvider)
 
 
 def create_provider(
