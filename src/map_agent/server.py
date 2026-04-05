@@ -1,49 +1,47 @@
-"""MCP Server for Huawei HMS Core Map Kit."""
+"""MCP Server for Map Agent with multi-provider support."""
 
 from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from mcp.server.fastmcp import FastMCP
 
-from .client import HMSMapClient
-from .config import get_api_key
-from .exceptions import HuaweiAPIError, NetworkError
-from .models import (
-    BicyclingRouteParams,
-    Coordinate,
-    DrivingRouteParams,
-    GeocodeParams,
-    KeywordSearchParams,
-    NearbySearchParams,
-    PlaceDetailParams,
-    QuerySuggestionParams,
-    ReverseGeocodeParams,
-    WalkingRouteParams,
-)
+from .providers.base import MapProvider, POI, Route
+from .config import get_api_key, TransportConfig
 
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP(
-    name="hms-map-kit",
-    instructions=(
-        "Provides access to Huawei Map Kit capabilities including: "
-        "nearby search, keyword search, place details, query suggestions, "
-        "geocoding, reverse geocoding, and driving/walking/bicycling route planning. "
-        "Coordinates use (lng, lat) format."
-    ),
-)
+# Global MCP server instance
+mcp: Optional[FastMCP] = None
 
-_client: HMSMapClient | None = None
+# Global provider instance
+_provider: Optional[MapProvider] = None
 
 
-def _get_client() -> HMSMapClient:
-    global _client
-    if _client is None:
-        _client = HMSMapClient(get_api_key())
-    return _client
+def _get_provider() -> MapProvider:
+    """Get or create the default provider instance."""
+    global _provider
+    if _provider is None:
+        # Default to HMS provider for backward compatibility
+        from .providers import create_provider, get_provider_config, get_default_provider
+        provider_id = get_default_provider()
+        config = get_provider_config(provider_id)
+        _provider = create_provider(provider_id, **config)
+        logger.info(f"Using provider: {provider_id}")
+    return _provider
+
+
+def set_provider(provider: MapProvider) -> None:
+    """Set the provider instance for the MCP server.
+
+    Args:
+        provider: Provider instance to use
+    """
+    global _provider
+    _provider = provider
+    logger.info(f"Set provider to: {provider.provider_id}")
 
 
 def _safe_json(data: Any) -> dict:
@@ -303,6 +301,284 @@ async def bicycling_route(
     return json.dumps(_safe_json(result), ensure_ascii=False)
 
 
+def create_server(provider_id: Optional[str] = None) -> FastMCP:
+    """Create and configure the MCP server.
+
+    Args:
+        provider_id: Optional provider ID to use (default: from env or 'hms')
+
+    Returns:
+        Configured FastMCP instance
+    """
+    global mcp
+
+    if provider_id is None:
+        from .providers import get_default_provider
+        provider_id = get_default_provider()
+
+    # Set up provider
+    _get_provider()
+
+    # Create MCP server with provider-specific instructions
+    provider_name = _provider.provider_name if _provider else provider_id
+    mcp = FastMCP(
+        name=f"map-agent-{provider_id}",
+        instructions=(
+            f"Multi-provider Map Agent using {provider_name}. "
+            f"Capabilities: nearby search, keyword search, place details, "
+            f"query suggestions, geocoding, reverse geocoding, and "
+            f"driving/walking/bicycling/cycling route planning. "
+            f"Coordinates use (lng, lat) format. "
+            f"Provider: {provider_id}"
+        ),
+    )
+
+    # Register tools dynamically based on provider
+    _register_provider_tools(mcp)
+
+    return mcp
+
+
+def _register_provider_tools(mcp_server: FastMCP) -> None:
+    """Register MCP tools for the current provider.
+
+    This dynamically creates tools that delegate to the provider instance.
+    """
+    provider = _get_provider()
+
+    @mcp_server.tool()
+    async def search_nearby(
+        lng: float,
+        lat: float,
+        query: str | None = None,
+        radius: int | None = 1000,
+        category: str | None = None,
+        language: str | None = None,
+        page_size: int = 20,
+        page_index: int = 1,
+    ) -> str:
+        """Search for places near a given location."""
+        try:
+            pois = await provider.search_nearby(
+                lat=lat, lon=lng, radius=radius, keyword=query,
+                category=category, language=language,
+                page_size=page_size, page_index=page_index,
+            )
+            return json.dumps({
+                "returnCode": "0",
+                "sites": [_poi_to_dict(p) for p in pois],
+                "totalCount": len(pois),
+            }, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"error": True, "message": str(e)}, ensure_ascii=False)
+
+    @mcp_server.tool()
+    async def search_keyword(
+        query: str,
+        lng: float | None = None,
+        lat: float | None = None,
+        radius: int | None = None,
+        category: str | None = None,
+        language: str | None = None,
+        page_size: int = 20,
+        page_index: int = 1,
+    ) -> str:
+        """Search for places by keyword."""
+        try:
+            pois = await provider.search_keyword(
+                keyword=query, lat=lat, lon=lng, radius=radius,
+                category=category, language=language,
+                page_size=page_size, page_index=page_index,
+            )
+            return json.dumps({
+                "returnCode": "0",
+                "sites": [_poi_to_dict(p) for p in pois],
+                "totalCount": len(pois),
+            }, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"error": True, "message": str(e)}, ensure_ascii=False)
+
+    @mcp_server.tool()
+    async def place_detail(
+        poi_id: str,
+        language: str | None = None,
+    ) -> str:
+        """Get detailed information about a place."""
+        try:
+            poi = await provider.get_poi_detail(poi_id, language=language)
+            return json.dumps({
+                "returnCode": "0",
+                "site": _poi_to_dict(poi),
+            }, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"error": True, "message": str(e)}, ensure_ascii=False)
+
+    @mcp_server.tool()
+    async def query_suggestion(
+        query: str,
+        lng: float | None = None,
+        lat: float | None = None,
+        radius: int | None = None,
+        language: str | None = None,
+    ) -> str:
+        """Get search query suggestions."""
+        try:
+            suggestions = await provider.search_suggestion(
+                keyword=query, lat=lat, lon=lng, radius=radius, language=language,
+            )
+            return json.dumps({
+                "returnCode": "0",
+                "suggestions": suggestions,
+            }, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"error": True, "message": str(e)}, ensure_ascii=False)
+
+    @mcp_server.tool()
+    async def geocode(
+        address: str,
+        language: str | None = None,
+    ) -> str:
+        """Convert address to coordinates."""
+        try:
+            results = await provider.geocode(address, language=language)
+            return json.dumps({
+                "returnCode": "0",
+                "sites": [{
+                    "name": r.formatted_address or "",
+                    "location": {"lat": r.lat, "lng": r.lon},
+                } for r in results],
+            }, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"error": True, "message": str(e)}, ensure_ascii=False)
+
+    @mcp_server.tool()
+    async def reverse_geocode(
+        lng: float,
+        lat: float,
+        language: str | None = None,
+        radius: int | None = None,
+    ) -> str:
+        """Convert coordinates to address."""
+        try:
+            result = await provider.reverse_geocode(lat, lng, language=language, radius=radius)
+            return json.dumps({
+                "returnCode": "0",
+                "sites": [result] if isinstance(result, dict) else [],
+            }, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"error": True, "message": str(e)}, ensure_ascii=False)
+
+    @mcp_server.tool()
+    async def driving_route(
+        origin_lng: float,
+        origin_lat: float,
+        dest_lng: float,
+        dest_lat: float,
+        waypoints: list[dict] | None = None,
+        avoid: list[str] | None = None,
+        alternatives: bool = False,
+        language: str | None = None,
+    ) -> str:
+        """Plan a driving route."""
+        try:
+            wp = [(w["lat"], w["lng"]) for w in waypoints] if waypoints else None
+            route = await provider.route(
+                origin_lat=origin_lat, origin_lon=origin_lng,
+                dest_lat=dest_lat, dest_lon=dest_lng,
+                mode="driving", waypoints=wp,
+                avoid=avoid, alternatives=alternatives, language=language,
+            )
+            return json.dumps({
+                "returnCode": "0",
+                "routes": [_route_to_dict(r) for r in [route]],
+            }, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"error": True, "message": str(e)}, ensure_ascii=False)
+
+    @mcp_server.tool()
+    async def walking_route(
+        origin_lng: float,
+        origin_lat: float,
+        dest_lng: float,
+        dest_lat: float,
+        language: str | None = None,
+    ) -> str:
+        """Plan a walking route."""
+        try:
+            route = await provider.route(
+                origin_lat=origin_lat, origin_lon=origin_lng,
+                dest_lat=dest_lat, dest_lon=dest_lng,
+                mode="walking", language=language,
+            )
+            return json.dumps({
+                "returnCode": "0",
+                "routes": [_route_to_dict(r) for r in [route]],
+            }, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"error": True, "message": str(e)}, ensure_ascii=False)
+
+    @mcp_server.tool()
+    async def bicycling_route(
+        origin_lng: float,
+        origin_lat: float,
+        dest_lng: float,
+        dest_lat: float,
+        avoid: list[str] | None = None,
+        language: str | None = None,
+    ) -> str:
+        """Plan a bicycling route."""
+        try:
+            route = await provider.route(
+                origin_lat=origin_lat, origin_lon=origin_lng,
+                dest_lat=dest_lat, dest_lon=dest_lng,
+                mode="cycling", avoid=avoid, language=language,
+            )
+            return json.dumps({
+                "returnCode": "0",
+                "routes": [_route_to_dict(r) for r in [route]],
+            }, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"error": True, "message": str(e)}, ensure_ascii=False)
+
+
+def _poi_to_dict(poi: POI) -> dict:
+    """Convert POI object to dict."""
+    return {
+        "siteId": poi.poi_id,
+        "name": poi.name,
+        "formatAddress": poi.address,
+        "location": {"lat": poi.lat, "lng": poi.lon},
+        "distance": poi.distance,
+        "poi": {
+            "type": poi.category,
+            "phone": poi.phone,
+            "websiteUrl": poi.website,
+        } if any([poi.category, poi.phone, poi.website]) else None,
+    }
+
+
+def _route_to_dict(route: Route) -> dict:
+    """Convert Route object to dict."""
+    return {
+        "distance": route.distance,
+        "duration": route.duration,
+        "bounds": route.bounds,
+        "polyline": route.polyline,
+        "steps": [
+            {
+                "instruction": s.instruction,
+                "distance": s.distance,
+                "duration": s.duration,
+                "action": s.maneuver,
+            }
+            for s in route.steps
+        ],
+    }
+
+
 def main() -> None:
-    """Entry point for MCP server (stdio transport)."""
-    mcp.run()
+    """Entry point for MCP server (stdio transport).
+
+    For backward compatibility, defaults to HMS provider.
+    """
+    create_server().run()

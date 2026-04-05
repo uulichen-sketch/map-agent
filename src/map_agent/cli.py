@@ -224,3 +224,64 @@ def route(ctx: click.Context, origin: str, dest: str, mode: str, language: str |
             return result.model_dump(mode="json", exclude_none=True)
 
     _run(_cmd(), fmt)
+
+
+@cli.command()
+@click.option("--transport", type=click.Choice(["stdio", "sse", "streamable-http"]), default="stdio", help="Transport protocol (stdio/sse/streamable-http)")
+@click.option("--host", default="0.0.0.0", help="Host for SSE/streamable-http transports")
+@click.option("--port", default=8000, type=int, help="Port for SSE/streamable-http transports")
+@click.option("--provider", default="hms", help="Map provider (hms/gaode/google)")
+def serve(transport: str, host: str, port: int, provider: str) -> None:
+    """Start MCP server.
+
+    Supports three transport modes:
+    - stdio: Standard input/output (default, best for local tools)
+    - sse: Server-Sent Events over HTTP (better for web clients)
+    - streamable-http: Streamable HTTP for long-running operations
+
+    Examples:
+        # Default stdio transport with HMS provider
+        map-agent serve
+
+        # SSE transport for web clients
+        map-agent serve --transport sse --host 0.0.0.0 --port 8000
+
+        # Streamable-http for long-running ops
+        map-agent serve --transport streamable-http --host 0.0.0.0 --port 8001
+    """
+    from .server import create_server, set_provider
+    from .providers import create_provider, get_provider_config
+
+    # Load provider configuration
+    try:
+        config = get_provider_config(provider)
+        provider_instance = create_provider(provider, **config)
+    except Exception as e:
+        click.echo(f"Error loading provider '{provider}': {e}", err=True)
+        sys.exit(1)
+
+    # Create MCP server and set provider
+    server = create_server(provider_id=provider)
+    set_provider(provider_instance)
+
+    async def run_server():
+        if transport == "stdio":
+            # Stdio is the default and requires no additional setup
+            click.echo("Starting MCP server with stdio transport...")
+            await server.run_stdin_stdout()
+        elif transport == "sse":
+            from .transports.sse import run_sse_server
+            click.echo(f"Starting MCP server with SSE transport on {host}:{port}...")
+            await run_sse_server(server, host, port)
+        elif transport == "streamable-http":
+            from .transports.streamable_http import run_streamable_http_server
+            click.echo(f"Starting MCP server with streamable-http transport on {host}:{port}...")
+            await run_streamable_http_server(server, host, port)
+
+    try:
+        asyncio.run(run_server())
+    except KeyboardInterrupt:
+        click.echo("\nServer stopped.")
+    except Exception as e:
+        click.echo(f"Server error: {e}", err=True)
+        sys.exit(1)
