@@ -1,11 +1,11 @@
 [project]
-name = "hms-map"
+name = "map-agent"
 version = "0.1.0"
-description = "A Model Context Protocol server and CLI tool for Huawei Map Kit"
+description = "Multi-provider Map MCP Server (Huawei/Gaode/Google) with SSE/streamable-http support"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-keywords = ["map", "mcp", "huawei", "hms", "geocoding", "route-planning"]
+keywords = ["map", "mcp", "huawei", "hms", "gaode", "google", "geocoding", "route-planning", "multi-provider", "sse"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -31,16 +31,16 @@ dev = [
 ]
 
 [project.scripts]
-hms-map = "hms_map.cli:cli"
-hms-map-mcp = "hms_map.server:main"
+map-agent = "map_agent.cli:cli"
+map-agent-mcp = "map_agent.server:main"
 
 [project.urls]
-Repository = "https://github.com/uulichen-sketch/hms-map"
-Issues = "https://github.com/uulichen-sketch/hms-map/issues"
+Repository = "https://github.com/uulichen-sketch/map-agent"
+Issues = "https://github.com/uulichen-sketch/map-agent/issues"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/hms_map"]
+packages = ["src/map_agent"]
