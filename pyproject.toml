@@ -1,13 +1,13 @@
 [project]
 name = "map-agent"
-version = "0.1.0"
+version = "1.0.0"
 description = "Multi-provider Map MCP Server (Huawei/Gaode/Google) with SSE/streamable-http support"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 keywords = ["map", "mcp", "huawei", "hms", "gaode", "google", "geocoding", "route-planning", "multi-provider", "sse"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
