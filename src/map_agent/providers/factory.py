@@ -92,3 +92,13 @@ def get_provider_config(provider_id: str) -> dict:
         raise ValueError(f"No configuration defined for provider: {provider_id}")
 
     return config
+
+
+def list_providers() -> dict:
+    """List all registered providers.
+
+    Returns:
+        Dictionary mapping provider_id to provider_name
+    """
+    from .registry import ProviderRegistry
+    return ProviderRegistry.list_providers()

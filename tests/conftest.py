@@ -1,7 +1,8 @@
 """Test fixtures for map-agent providers and tools."""
 
 import pytest
-from typing import AsyncMock, Dict, Any
+from typing import Dict, Any
+from unittest.mock import AsyncMock
 
 from map_agent.providers.base import POI, Route, RouteStep, GeocodeResult
 
